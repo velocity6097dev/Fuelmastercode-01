@@ -1,0 +1,2 @@
+velocity6097.fuelmaster.dev.test:style/WhiteBackgroundTheme = 0x7f010001
+velocity6097.fuelmaster.dev.test:style/WhiteBackgroundDialogTheme = 0x7f010000
