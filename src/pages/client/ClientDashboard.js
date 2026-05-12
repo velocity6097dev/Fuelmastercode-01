@@ -12,7 +12,8 @@ import {
   Info, 
   RefreshCw, 
   FileText, 
-  UserCircle 
+  UserCircle,
+  Receipt // Added new icon for the invoice
 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
@@ -131,6 +132,13 @@ const ClientDashboard = () => {
                 <div className="icon-box green"><FileCheck /></div>
                 <span>Variance</span>
             </button>
+            
+            {/* NEW: Reimbursement Invoice Generator */}
+            <button className="nav-card" onClick={() => handleNav('/reimbursement')}>
+                <div className="icon-box" style={{background:'#0ea5e9'}}><Receipt /></div>
+                <span style={{fontSize:'0.75rem'}}>Invoice</span>
+            </button>
+
             <button className="nav-card" onClick={() => handleNav('/compliance')}>
                 <div className="icon-box purple" style={{background:'#8b5cf6'}}><FileText /></div>
                 <span style={{fontSize:'0.75rem'}}>Reminders</span>

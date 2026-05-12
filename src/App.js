@@ -17,6 +17,8 @@ import Variance from './pages/client/Variance';
 import Staff from './pages/client/Staff';
 import Compliance from './pages/client/Compliance';
 import About from './pages/client/About';
+// NEW: Import the Reimbursement Invoice page
+import ReimbursementInvoice from './pages/client/ReimbursementInvoice';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading: authLoading, logout } = useAuth();
@@ -126,6 +128,9 @@ const AppRoutes = () => {
             <Route path="/staff" element={<ProtectedRoute><Staff /></ProtectedRoute>} />
             <Route path="/compliance" element={<ProtectedRoute><Compliance /></ProtectedRoute>} />
             <Route path="/about" element={<ProtectedRoute><About /></ProtectedRoute>} />
+            
+            {/* NEW: Reimbursement Route */}
+            <Route path="/reimbursement" element={<ProtectedRoute><ReimbursementInvoice /></ProtectedRoute>} />
             
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
