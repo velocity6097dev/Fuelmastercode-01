@@ -616,3 +616,25 @@ button { font-family: inherit; }
     background: var(--surface); 
     box-shadow: 0 0 0 4px var(--primary-glow); 
 }
+
+/* Target the select element specifically inside your input groups */
+.input-group select {
+  /* 1. Remove the default browser arrow */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  
+  /* 2. Add a custom SVG chevron arrow */
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  
+  /* 3. Position it on the right side, centered vertically */
+  background-position: right 1rem center;
+  background-size: 1.2em;
+  
+  /* 4. Add padding to the right so the text doesn't overlap the icon */
+  padding-right: 2.5rem;
+  
+  /* Ensure cursor shows it's clickable */
+  cursor: pointer;
+}
