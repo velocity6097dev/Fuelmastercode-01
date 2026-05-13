@@ -143,10 +143,9 @@ const ReimbursementInvoice = () => {
   }; 
 
   // ========================================== 
-  // IMAGE ACQUISITION (PC File vs Mobile Camera)
+  // IMAGE ACQUISITION & MEMORY MANAGEMENT
   // ========================================== 
   const openSourcePicker = (targetName) => {
-    // If running on PC/Web Browser, skip the mobile picker and trigger file input directly
     if (!Capacitor.isNativePlatform()) {
       if (targetName === 'header') headerInputRef.current.click();
       else if (targetName === 'cert') certInputRef.current.click();
@@ -154,14 +153,11 @@ const ReimbursementInvoice = () => {
       else if (targetName === 'supporting') supportingInputRef.current.click();
       return;
     }
-
-    // Mobile App Behavior
     try { triggerHaptic(ImpactStyle.Light); } catch(err) {} 
     setCurrentTarget(targetName);
     setPickerOpen(true);
   };
 
-  // Anti-Lag Pre-Processor: Downscales extreme 4K camera photos before they hit the ReactCrop DOM
   const processAndOpenEditor = (dataUrl, targetName) => {
     const img = new Image();
     img.onload = () => {
@@ -184,27 +180,32 @@ const ReimbursementInvoice = () => {
       setEditorSrc(canvas.toDataURL('image/jpeg', 0.9));
       setEditorTarget(targetName);
       setEditorOpen(true);
+
+      // Memory Leak Fix: Free image reference from DOM once drawn
+      img.onload = null;
+      img.src = "";
     };
     img.src = dataUrl;
   };
 
-  // Web File Picker Handler
   const onWebFileSelect = (e, targetSetterName) => {
     if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
       const reader = new FileReader();
-      reader.addEventListener('load', () => {
+      reader.onload = () => {
         processAndOpenEditor(reader.result, targetSetterName);
-      });
-      reader.readAsDataURL(e.target.files[0]);
+      };
+      reader.readAsDataURL(file);
+      // Memory Leak Fix: Reset target value so picking the same file again works and releases reference
+      e.target.value = '';
     }
   };
 
-  // Mobile Capacitor Handler
   const handleCapacitorImage = async (sourceType) => {
     setPickerOpen(false);
     try {
       const image = await Camera.getPhoto({
-        quality: 85, // Optimized to prevent DOM lag
+        quality: 85, 
         allowEditing: false, 
         resultType: CameraResultType.DataUrl,
         source: sourceType === 'camera' ? CameraSource.Camera : CameraSource.Photos
@@ -311,6 +312,7 @@ const ReimbursementInvoice = () => {
     setIsGenerating(true); 
     setLoadingType(action); 
     await new Promise(resolve => setTimeout(resolve, 500)); 
+
     try { 
       const doc = new jsPDF({ format: 'a4', unit: 'mm' }); 
       const startX = 15; 
@@ -349,13 +351,19 @@ const ReimbursementInvoice = () => {
       printText(vendorCode || "N/A", startX + 120, y + 5, 9); 
       printText("INVOICE DATE:", startX + 2, y + 13, 9, "helvetica", "bold"); 
       printText(formatDate(invoiceDate), startX + 28, y + 13, 9); 
+      
+      // FIXED BUG: Using dynamic GSTIN value
       printText("GSTN NO :", startX + 92, y + 13, 9, "helvetica", "bold"); 
-      printText("19AAWFB8708J1ZO", startX + 112, y + 13, 9); 
+      printText(gstin || "N/A", startX + 112, y + 13, 9); 
+      
       y += 16; 
       doc.rect(startX, y, pageW, 8); 
       doc.line(startX + 90, y, startX + 90, y + 8); 
+      
+      // FIXED BUG: Using dynamic PAN value
       printText("PAN NO :", startX + 92, y + 5, 9, "helvetica", "bold"); 
-      printText("AAWFB8708J", startX + 110, y + 5, 9); 
+      printText(panNo || "N/A", startX + 110, y + 5, 9); 
+
       y += 12; 
       printText("Subject: Reimbursement of Stamping Fee", 105, y + 5, 10, "helvetica", "bold", "center"); 
       doc.line(75, y + 6, 135, y + 6); 
@@ -432,14 +440,12 @@ const ReimbursementInvoice = () => {
         return new Promise((resolve, reject) => { 
           const img = new Image(); 
           img.onload = () => { 
-            // 1. ALL pages must be portrait ('p') to prevent the PDF viewer from changing widths.
             doc.addPage('a4', 'p'); 
             const PAGE_W = 210; 
             const PAGE_H = 297; 
             
             let printB64 = base64Img;
             
-            // 2. If the image is landscape, rotate the IMAGE 90 degrees inside the portrait page
             if (img.width > img.height) {
               const canvas = document.createElement('canvas');
               canvas.width = img.height;
@@ -493,6 +499,8 @@ const ReimbursementInvoice = () => {
         const pdfBlob = doc.output('blob'); 
         const blobUrl = URL.createObjectURL(pdfBlob); 
         window.open(blobUrl, '_blank'); 
+        // Memory Leak Fix: Automatically revoke the heavy Blob object URL after passing it to the new tab
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
       } else { 
         doc.save(`Reimbursement_${invoiceNo.replace(/[/\\?%*:|"<>]/g, '-')}.pdf`); 
       } 
