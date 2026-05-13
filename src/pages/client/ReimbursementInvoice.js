@@ -2,15 +2,16 @@ import React, { useState, useRef, useEffect } from 'react';
 import Navbar from '../../components/common/Navbar'; 
 import { triggerHaptic } from '../../utils/audio'; 
 import { ImpactStyle } from '@capacitor/haptics'; 
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Capacitor } from '@capacitor/core';
 import { jsPDF } from 'jspdf'; 
-import { UploadCloud, X, Loader2, Building, CalendarDays, Settings2, FileCheck2, Crop, RotateCw, Check } from 'lucide-react'; 
+import { UploadCloud, X, Loader2, Building, CalendarDays, Settings2, FileCheck2, Crop, RotateCw, Check, Camera as CameraIcon, Image as ImageIcon } from 'lucide-react'; 
 import ReactCrop, { centerCrop, makeAspectCrop } from 'react-image-crop'; 
 import 'react-image-crop/dist/ReactCrop.css'; 
 
 const ReimbursementInvoice = () => { 
   // --- STATE: 6CM HEADER --- 
   const [pumpHeaderImg, setPumpHeaderImg] = useState(null); 
-  const headerInputRef = useRef(null); 
 
   // --- STATE: DEALER INFO (Saved to Local Storage) --- 
   const [dealerCode, setDealerCode] = useState(''); 
@@ -35,13 +36,15 @@ const ReimbursementInvoice = () => {
 
   // --- STATE: ATTACHMENTS --- 
   const [certImg, setCertImg] = useState(null); 
-  const certInputRef = useRef(null); 
   const [receiptImg, setReceiptImg] = useState(null); 
-  const receiptInputRef = useRef(null); 
   const [supportingImg, setSupportingImg] = useState(null); 
-  const supportingInputRef = useRef(null); 
+  
   const [isGenerating, setIsGenerating] = useState(false); 
   const [loadingType, setLoadingType] = useState(null); 
+
+  // --- STATE: CAMERA PICKER UI ---
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [currentTarget, setCurrentTarget] = useState(null);
 
   // --- STATE: IMAGE EDITOR (Phone Style) --- 
   const [editorOpen, setEditorOpen] = useState(false); 
@@ -49,6 +52,12 @@ const ReimbursementInvoice = () => {
   const [editorTarget, setEditorTarget] = useState(null); 
   const [crop, setCrop] = useState(); 
   const imgRef = useRef(null); 
+
+  // --- REFS: HIDDEN INPUTS FOR WEB/PC ---
+  const headerInputRef = useRef(null);
+  const certInputRef = useRef(null);
+  const receiptInputRef = useRef(null);
+  const supportingInputRef = useRef(null);
 
   // ========================================== 
   // LOCAL STORAGE (PERSISTENCE) 
@@ -134,86 +143,144 @@ const ReimbursementInvoice = () => {
   }; 
 
   // ========================================== 
+  // IMAGE ACQUISITION (PC File vs Mobile Camera)
+  // ========================================== 
+  const openSourcePicker = (targetName) => {
+    // If running on PC/Web Browser, skip the mobile picker and trigger file input directly
+    if (!Capacitor.isNativePlatform()) {
+      if (targetName === 'header') headerInputRef.current.click();
+      else if (targetName === 'cert') certInputRef.current.click();
+      else if (targetName === 'receipt') receiptInputRef.current.click();
+      else if (targetName === 'supporting') supportingInputRef.current.click();
+      return;
+    }
+
+    // Mobile App Behavior
+    try { triggerHaptic(ImpactStyle.Light); } catch(err) {} 
+    setCurrentTarget(targetName);
+    setPickerOpen(true);
+  };
+
+  // Anti-Lag Pre-Processor: Downscales extreme 4K camera photos before they hit the ReactCrop DOM
+  const processAndOpenEditor = (dataUrl, targetName) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX_DIMENSION = 1600; 
+      let w = img.width;
+      let h = img.height;
+
+      if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
+        const ratio = Math.min(MAX_DIMENSION / w, MAX_DIMENSION / h);
+        w *= ratio;
+        h *= ratio;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+
+      setEditorSrc(canvas.toDataURL('image/jpeg', 0.9));
+      setEditorTarget(targetName);
+      setEditorOpen(true);
+    };
+    img.src = dataUrl;
+  };
+
+  // Web File Picker Handler
+  const onWebFileSelect = (e, targetSetterName) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const reader = new FileReader();
+      reader.addEventListener('load', () => {
+        processAndOpenEditor(reader.result, targetSetterName);
+      });
+      reader.readAsDataURL(e.target.files[0]);
+    }
+  };
+
+  // Mobile Capacitor Handler
+  const handleCapacitorImage = async (sourceType) => {
+    setPickerOpen(false);
+    try {
+      const image = await Camera.getPhoto({
+        quality: 85, // Optimized to prevent DOM lag
+        allowEditing: false, 
+        resultType: CameraResultType.DataUrl,
+        source: sourceType === 'camera' ? CameraSource.Camera : CameraSource.Photos
+      });
+
+      if (image && image.dataUrl) {
+        processAndOpenEditor(image.dataUrl, currentTarget);
+      }
+    } catch (error) {
+      console.log('User cancelled image selection:', error);
+    }
+  };
+
+  // ========================================== 
   // PHONE-STYLE IMAGE EDITOR LOGIC 
   // ========================================== 
-  const onSelectFile = (e, targetSetterName) => { 
-    if (e.target.files && e.target.files.length > 0) { 
-      try { triggerHaptic(ImpactStyle.Light); } catch(err) {} 
-      const reader = new FileReader(); 
-      reader.addEventListener('load', () => { 
-        setEditorSrc(reader.result); 
-        setEditorTarget(targetSetterName); 
-        setEditorOpen(true); 
-      }); 
-      reader.readAsDataURL(e.target.files[0]); 
-    } 
-  }; 
-
   const onImageLoad = (e) => { 
     const { width, height } = e.currentTarget; 
+    const isHeader = editorTarget === 'header';
+    const aspect = isHeader ? (210 / 60) : undefined;
+    
     const initialCrop = centerCrop( 
-      makeAspectCrop({ unit: '%', width: 95 }, width / height, width, height), 
+      makeAspectCrop({ unit: '%', width: 95 }, aspect || (width / height), width, height), 
       width, height 
     ); 
     setCrop(initialCrop); 
   }; 
 
-  // FIXED ROTATION LOGIC: Physically rotates the image data so react-image-crop frames it correctly
   const handleRotate = () => { 
     if (!imgRef.current) return;
-    
     try { triggerHaptic(ImpactStyle.Light); } catch(err) {} 
-
+    
     const image = imgRef.current;
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
-    // Swap width and height for 90-degree rotation
     canvas.width = image.naturalHeight;
     canvas.height = image.naturalWidth;
-
-    // Translate to center, rotate, and draw
     ctx.translate(canvas.width / 2, canvas.height / 2);
     ctx.rotate((90 * Math.PI) / 180);
     ctx.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
 
-    // Export new rotated image and update source
     const newBase64 = canvas.toDataURL('image/jpeg', 1.0);
     setEditorSrc(newBase64); 
-    setCrop(undefined); // Clear crop so onImageLoad resets it perfectly
+    setCrop(undefined); 
   }; 
 
-  // FIXED CROP LOGIC: Image is already rotated, just crop the visible area
   const applyCropAndRotation = async () => { 
     if (!imgRef.current || !crop) return; 
-
     try { triggerHaptic(ImpactStyle.Light); } catch(err) {} 
 
     const image = imgRef.current; 
     const canvas = document.createElement('canvas'); 
     const ctx = canvas.getContext('2d'); 
     
-    const scaleX = image.naturalWidth / image.width; 
-    const scaleY = image.naturalHeight / image.height; 
+    let pixelX, pixelY, pixelW, pixelH;
     
-    canvas.width = crop.width * scaleX; 
-    canvas.height = crop.height * scaleY; 
+    if (crop.unit === '%') {
+      pixelX = (crop.x / 100) * image.naturalWidth;
+      pixelY = (crop.y / 100) * image.naturalHeight;
+      pixelW = (crop.width / 100) * image.naturalWidth;
+      pixelH = (crop.height / 100) * image.naturalHeight;
+    } else {
+      const scaleX = image.naturalWidth / image.width;
+      const scaleY = image.naturalHeight / image.height;
+      pixelX = crop.x * scaleX;
+      pixelY = crop.y * scaleY;
+      pixelW = crop.width * scaleX;
+      pixelH = crop.height * scaleY;
+    }
     
+    canvas.width = pixelW; 
+    canvas.height = pixelH; 
     ctx.imageSmoothingEnabled = true; 
     ctx.imageSmoothingQuality = 'high'; 
-    
-    // Draw only the cropped portion
-    ctx.drawImage( 
-      image, 
-      crop.x * scaleX, 
-      crop.y * scaleY, 
-      crop.width * scaleX, 
-      crop.height * scaleY, 
-      0, 
-      0, 
-      canvas.width, 
-      canvas.height 
-    ); 
+    ctx.drawImage(image, pixelX, pixelY, pixelW, pixelH, 0, 0, pixelW, pixelH); 
     
     const base64Image = canvas.toDataURL('image/jpeg', 1.0); 
     
@@ -246,8 +313,6 @@ const ReimbursementInvoice = () => {
     await new Promise(resolve => setTimeout(resolve, 500)); 
     try { 
       const doc = new jsPDF({ format: 'a4', unit: 'mm' }); 
-      const A4_WIDTH = 210; 
-      const A4_HEIGHT = 297; 
       const startX = 15; 
       const pageW = 180; 
       let y = 60; 
@@ -361,39 +426,68 @@ const ReimbursementInvoice = () => {
       printText("(Name/Signature/Seal of the Dealer)", pageW - 20, y + 58, 9, "helvetica", "normal", "center"); 
 
       // ------------------------------------------ 
-      // SEPARATE A4 PAGES FOR ATTACHMENTS 
+      // FIXED PAGE ORIENTATION LOGIC
       // ------------------------------------------ 
-      const fitImageToA4 = async (base64Img) => { 
+      const fitImageToA4Fixed = async (base64Img) => { 
         return new Promise((resolve, reject) => { 
           const img = new Image(); 
           img.onload = () => { 
-            const orientation = img.width > img.height ? 'l' : 'p'; 
-            doc.addPage('a4', orientation); 
-            const imgW = orientation === 'l' ? A4_HEIGHT : A4_WIDTH; 
-            const imgH = orientation === 'l' ? A4_WIDTH : A4_HEIGHT; 
-            const imgRatio = img.width / img.height; 
-            const pageRatio = imgW / imgH; 
-            let finalW, finalH; 
-            if (imgRatio > pageRatio) { 
-              finalW = imgW - 20; 
-              finalH = finalW / imgRatio; 
-            } else { 
-              finalH = imgH - 40; 
-              finalW = finalH * imgRatio; 
-            } 
-            const x = (imgW - finalW) / 2; 
-            const y = (imgH - finalH) / 2; 
-            doc.addImage(base64Img, 'JPEG', x, y, finalW, finalH); 
-            resolve(); 
+            // 1. ALL pages must be portrait ('p') to prevent the PDF viewer from changing widths.
+            doc.addPage('a4', 'p'); 
+            const PAGE_W = 210; 
+            const PAGE_H = 297; 
+            
+            let printB64 = base64Img;
+            
+            // 2. If the image is landscape, rotate the IMAGE 90 degrees inside the portrait page
+            if (img.width > img.height) {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.height;
+              canvas.height = img.width;
+              const ctx = canvas.getContext('2d');
+              ctx.translate(canvas.width / 2, canvas.height / 2);
+              ctx.rotate(90 * Math.PI / 180);
+              ctx.drawImage(img, -img.width / 2, -img.height / 2);
+              printB64 = canvas.toDataURL('image/jpeg', 1.0);
+              
+              const rotatedImg = new Image();
+              rotatedImg.onload = () => {
+                drawToPage(rotatedImg, printB64, PAGE_W, PAGE_H);
+                resolve();
+              };
+              rotatedImg.src = printB64;
+              return;
+            }
+
+            drawToPage(img, printB64, PAGE_W, PAGE_H);
+            resolve();
+
+            function drawToPage(imageObj, srcB64, w, h) {
+              const imgRatio = imageObj.width / imageObj.height; 
+              const pageRatio = w / h; 
+              
+              let finalW, finalH; 
+              if (imgRatio > pageRatio) { 
+                finalW = w - 20; 
+                finalH = finalW / imgRatio; 
+              } else { 
+                finalH = h - 20; 
+                finalW = finalH * imgRatio; 
+              } 
+              const x = (w - finalW) / 2; 
+              const y = (h - finalH) / 2; 
+              
+              doc.addImage(srcB64, 'JPEG', x, y, finalW, finalH); 
+            }
           }; 
           img.onerror = () => reject(new Error("Image failed to load.")); 
           img.src = base64Img; 
         }); 
       }; 
 
-      if (certImg) await fitImageToA4(certImg); 
-      if (receiptImg) await fitImageToA4(receiptImg); 
-      if (supportingImg) await fitImageToA4(supportingImg); 
+      if (certImg) await fitImageToA4Fixed(certImg); 
+      if (receiptImg) await fitImageToA4Fixed(receiptImg); 
+      if (supportingImg) await fitImageToA4Fixed(supportingImg); 
 
       if (action === 'preview') { 
         const pdfBlob = doc.output('blob'); 
@@ -424,10 +518,6 @@ const ReimbursementInvoice = () => {
       localStorage.removeItem('wm_gstin'); 
       localStorage.removeItem('wm_panNo'); 
       localStorage.removeItem('wm_dealerName'); 
-      if(headerInputRef.current) headerInputRef.current.value = ''; 
-      if(certInputRef.current) certInputRef.current.value = ''; 
-      if(receiptInputRef.current) receiptInputRef.current.value = ''; 
-      if(supportingInputRef.current) supportingInputRef.current.value = ''; 
     } 
   }; 
 
@@ -435,6 +525,12 @@ const ReimbursementInvoice = () => {
     <div className="app-layout"> 
       <Navbar title="W&M Reimbursement" /> 
       <main className="main-content" style={{ paddingTop: '10px' }}> 
+        {/* --- WEB FALLBACK HIDDEN INPUTS --- */}
+        <input type="file" accept="image/*" ref={headerInputRef} onChange={(e) => onWebFileSelect(e, 'header')} style={{ display: 'none' }} /> 
+        <input type="file" accept="image/*" ref={certInputRef} onChange={(e) => onWebFileSelect(e, 'cert')} style={{ display: 'none' }} /> 
+        <input type="file" accept="image/*" ref={receiptInputRef} onChange={(e) => onWebFileSelect(e, 'receipt')} style={{ display: 'none' }} /> 
+        <input type="file" accept="image/*" ref={supportingInputRef} onChange={(e) => onWebFileSelect(e, 'supporting')} style={{ display: 'none' }} /> 
+
         {/* --- 6CM PUMP HEADER UPLOAD --- */} 
         <div style={{ height: '226px', width: '100%', backgroundColor: 'var(--surface)', border: pumpHeaderImg ? 'none' : '2px dashed var(--border)', borderRadius: '16px', marginBottom: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}> 
           {pumpHeaderImg ? ( 
@@ -445,13 +541,12 @@ const ReimbursementInvoice = () => {
               </button> 
             </> 
           ) : ( 
-            <div onClick={() => headerInputRef.current.click()} style={{ cursor: 'pointer', textAlign: 'center', color: 'var(--text-muted)' }}> 
+            <div onClick={() => openSourcePicker('header')} style={{ cursor: 'pointer', textAlign: 'center', color: 'var(--text-muted)' }}> 
               <UploadCloud size={40} style={{ marginBottom: '10px', opacity: 0.5, margin: '0 auto' }} /> 
               <p style={{ fontWeight: 600, margin: 0 }}>Station Letterhead</p> 
               <p style={{ fontSize: '0.8rem', marginTop: '5px' }}>Top 6cm PDF Print Space</p> 
             </div> 
           )} 
-          <input type="file" accept="image/*" ref={headerInputRef} onChange={(e) => onSelectFile(e, 'header')} style={{ display: 'none' }} /> 
         </div> 
 
         {/* --- DEALER INFORMATION --- */} 
@@ -585,12 +680,11 @@ const ReimbursementInvoice = () => {
                   <button onClick={() => setCertImg(null)} style={{ position: 'absolute', top: 5, right: 5, background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', padding: '4px' }}><X size={14} /></button> 
                 </> 
               ) : ( 
-                <div onClick={() => certInputRef.current.click()} style={{ textAlign: 'center', cursor: 'pointer' }}> 
+                <div onClick={() => openSourcePicker('cert')} style={{ textAlign: 'center', cursor: 'pointer' }}> 
                   <p style={{ margin: '0 0 5px 0', fontSize: '1.5rem' }}>📄</p> 
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>W&M Cert</div> 
                 </div> 
               )} 
-              <input type="file" accept="image/*" ref={certInputRef} onChange={(e) => onSelectFile(e, 'cert')} hidden /> 
             </div> 
 
             {/* Receipt Upload */} 
@@ -601,12 +695,11 @@ const ReimbursementInvoice = () => {
                   <button onClick={() => setReceiptImg(null)} style={{ position: 'absolute', top: 5, right: 5, background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', padding: '4px' }}><X size={14} /></button> 
                 </> 
               ) : ( 
-                <div onClick={() => receiptInputRef.current.click()} style={{ textAlign: 'center', cursor: 'pointer' }}> 
+                <div onClick={() => openSourcePicker('receipt')} style={{ textAlign: 'center', cursor: 'pointer' }}> 
                   <p style={{ margin: '0 0 5px 0', fontSize: '1.5rem' }}>🧾</p> 
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Receipt</div> 
                 </div> 
               )} 
-              <input type="file" accept="image/*" ref={receiptInputRef} onChange={(e) => onSelectFile(e, 'receipt')} hidden /> 
             </div> 
 
             {/* Supporting Document Upload */} 
@@ -617,12 +710,11 @@ const ReimbursementInvoice = () => {
                   <button onClick={() => setSupportingImg(null)} style={{ position: 'absolute', top: 5, right: 5, background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', padding: '4px' }}><X size={14} /></button> 
                 </> 
               ) : ( 
-                <div onClick={() => supportingInputRef.current.click()} style={{ textAlign: 'center', cursor: 'pointer' }}> 
+                <div onClick={() => openSourcePicker('supporting')} style={{ textAlign: 'center', cursor: 'pointer' }}> 
                   <p style={{ margin: '0 0 5px 0', fontSize: '1.5rem' }}>📎</p> 
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Extra Doc</div> 
                 </div> 
               )} 
-              <input type="file" accept="image/*" ref={supportingInputRef} onChange={(e) => onSelectFile(e, 'supporting')} hidden /> 
             </div> 
           </div> 
         </div> 
@@ -641,10 +733,29 @@ const ReimbursementInvoice = () => {
         </div> 
       </main> 
 
+      {/* --- CAMERA vs GALLERY PICKER MODAL --- */}
+      {pickerOpen && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', width: '100%', padding: '25px', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', animation: 'slideUp 0.3s ease-out' }}>
+            <h3 style={{ margin: '0 0 20px 0', textAlign: 'center', fontSize: '1.1rem', color: '#333' }}>Select Image Source</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <button onClick={() => handleCapacitorImage('camera')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '16px', borderRadius: '12px', background: '#3b82f6', color: '#fff', fontSize: '1rem', fontWeight: 600, border: 'none', cursor: 'pointer' }}>
+                <CameraIcon size={20} /> Take Photo
+              </button>
+              <button onClick={() => handleCapacitorImage('gallery')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '16px', borderRadius: '12px', background: '#e2e8f0', color: '#1e293b', fontSize: '1rem', fontWeight: 600, border: 'none', cursor: 'pointer' }}>
+                <ImageIcon size={20} /> Choose from Gallery
+              </button>
+              <button onClick={() => setPickerOpen(false)} style={{ padding: '14px', borderRadius: '12px', background: 'transparent', color: '#ef4444', fontSize: '1rem', fontWeight: 600, border: 'none', marginTop: '10px', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- PHONE-STYLE CROP & ROTATE MODAL OVERLAY --- */} 
       {editorOpen && ( 
         <div style={{ position: 'fixed', inset: 0, backgroundColor: '#000', zIndex: 9999, display: 'flex', flexDirection: 'column' }}> 
-          {/* Top Navbar */} 
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '20px', color: '#fff', alignItems: 'center' }}> 
             <button onClick={closeEditor} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}> 
               <X size={24} /> 
@@ -655,9 +766,13 @@ const ReimbursementInvoice = () => {
             </button> 
           </div> 
           
-          {/* Interactive Crop Area */} 
           <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', padding: '20px' }}> 
-            <ReactCrop crop={crop} onChange={c => setCrop(c)} minWidth={50} minHeight={50}> 
+            <ReactCrop 
+               crop={crop} 
+               onChange={c => setCrop(c)} 
+               aspect={editorTarget === 'header' ? 210 / 60 : undefined} 
+               minWidth={50}
+            > 
               <img 
                 ref={imgRef} 
                 src={editorSrc} 
@@ -668,7 +783,6 @@ const ReimbursementInvoice = () => {
             </ReactCrop> 
           </div> 
           
-          {/* Bottom Toolbar */} 
           <div style={{ padding: '30px', background: 'rgba(25,25,25,1)', display: 'flex', justifyContent: 'center', gap: '50px', paddingBottom: '40px' }}> 
             <div onClick={handleRotate} style={{ textAlign: 'center', color: '#fff', cursor: 'pointer' }}> 
               <RotateCw size={24} style={{ marginBottom: '8px', margin: '0 auto' }} /> 
@@ -686,6 +800,13 @@ const ReimbursementInvoice = () => {
         <p style={{ fontSize: '0.85rem', color: 'var(--text-main)', marginBottom: '5px' }}>Made by <strong>Velocity6097</strong></p> 
         <p className="special-thanks" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Special thanks to Mr. Baibhav Bishal Sir for this opportunity</p> 
       </footer> 
+      
+      <style>{`
+        @keyframes slideUp {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+      `}</style>
     </div> 
   ); 
 }; 
