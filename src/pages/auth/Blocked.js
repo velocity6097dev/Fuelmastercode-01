@@ -98,7 +98,7 @@ export default function Blocked() {
             System Locked
           </h1>
           <p style={{ color: 'var(--text-muted, #64748b)', fontSize: '0.95rem', lineHeight: '1.6', margin: 0, padding: '0 10px' }}>
-            Access to your NexShift dashboard has been suspended due to an inactive monthly subscription.
+            Access to your FuelMaster dashboard has been suspended due to an inactive monthly subscription.
           </p>
         </div>
 
